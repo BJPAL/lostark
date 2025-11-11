@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>3×6 카드 위치 메모</title>
+<style>
+  :root{
+    --cols: 6; --rows: 3; --gap: 10px;
+    --card-w: 120px; --card-h: 170px;
+  }
+  *{box-sizing:border-box}
+  body{font-family:system-ui,"Noto Sans KR",sans-serif;background:#0b0f12;color:#eee;margin:0}
+  header{padding:24px 20px 10px}
+  h1{font-size:36px;margin:10px 0 12px;text-align:center;} 
+
+  .controls{display:flex;justify-content:center;margin:0 0 12px}
+  .btn-big{
+    background:#1f6feb;border:0;color:#fff;cursor:pointer;
+    padding:14px 22px;border-radius:12px;font-size:18px;font-weight:700;
+    box-shadow:0 4px 14px rgba(31,111,235,.3)
+  }
+
+  .stage{min-height:calc(100vh - 120px);display:flex;align-items:center;justify-content:center;padding:16px}
+  .grid{
+    display:grid;grid-template-columns:repeat(var(--cols), var(--card-w));
+    gap:var(--gap);background:#071018;padding:12px;border-radius:12px;
+    border:1px solid rgba(255,255,255,.06)
+  }
+
+  .card{
+    --hl: transparent; --hlA: transparent;
+    width:var(--card-w);height:var(--card-h);border-radius:10px;position:relative;
+    background:#000 url('./card-back.png') center/cover no-repeat;
+    outline:2px solid var(--hl);
+    transition:outline-color .18s, box-shadow .18s;
+    box-shadow:0 6px 16px rgba(0,0,0,.55);
+    display:flex;align-items:flex-end;justify-content:center;padding:10px;
+  }
+  .card.named{
+    box-shadow:0 0 0 4px var(--hlA), 0 10px 24px rgba(0,0,0,.65);
+  }
+
+  .name{
+    width:100%;padding:9px 10px;border-radius:8px;
+    border:1px solid rgba(255,255,255,.18);
+    background:rgba(7,16,24,.86);
+    color:#ffd77a;font-weight:800;text-align:center;outline:none;
+  }
+  .name::placeholder{color:rgba(255,215,122,.5)}
+  .name:focus{border-color:#3b82f6;box-shadow:0 0 0 3px rgba(59,130,246,.25)}
+
+  @media (max-width:820px){ :root{ --card-w: 96px; --card-h: 138px; } }
+</style>
+</head>
+<body>
+  <header>
+    <h1>카드맞추기 메모장</h1>
+    <div class="controls"><button id="clearAll" class="btn-big">초기화</button></div>
+  </header>
+
+  <div class="stage"><div class="grid" id="grid"></div></div>
+
+<script>
+  const COLS=6, ROWS=3, COUNT=COLS*ROWS;
+  const grid = document.getElementById('grid');
+  const inputs = [];
+  const colorMap = new Map();       // key -> {hl, hlA, hue}
+  const usedHues = [];              // 배정된 hue 목록(0~360)
+  const GOLDEN_ANGLE = 137.508;     // 균등 분산
+  let hueSeed = Math.random()*360;  // 시작점 랜덤
+  let hueIndex = 0;                 // 다음 색 인덱스
+  const MIN_SEP = 26;               // 최소 색상 간격(도)
+
+  const norm = v => (v || '').replace(/\s+/g,''); // 공백 제거
+
+  function circularDist(a,b){
+    const d = Math.abs(a-b)%360;
+    return d>180? 360-d : d;
+  }
+
+  function nextDistinctHue(){
+    // 골든앵글로 후보 생성 → 기존 hue들과 최소 간격을 만족할 때까지 진행
+    let tries = 0;
+    while(true){
+      const hue = (hueSeed + hueIndex*GOLDEN_ANGLE) % 360;
+      hueIndex++;
+      tries++;
+      if(usedHues.length === 0) { usedHues.push(hue); return hue; }
+      const ok = usedHues.every(h => circularDist(hue, h) >= MIN_SEP);
+      if(ok || tries>720){ usedHues.push(hue); return hue; } // 안전장치
+    }
+  }
+
+  function makeColorFromHue(h){
+    const s = 78;           // 채도 고정(선명)
+    const l = 58;           // 명도 고정(가독)
+    return {
+      hl : `hsl(${h} ${s}% ${l}%)`,
+      hlA: `hsl(${h} ${s}% ${l}% / .35)`,
+      hue: h
+    };
+  }
+
+  function assignColorForKey(key){
+    if(colorMap.has(key)) return colorMap.get(key);
+    const hue = nextDistinctHue();
+    const c = makeColorFromHue(hue);
+    colorMap.set(key, c);
+    return c;
+  }
+
+  // 카드 DOM 생성
+  for(let i=1;i<=COUNT;i++){
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML = `
+      <input class="name" type="text" inputmode="text" autocomplete="off"
+             spellcheck="false" placeholder="카드 이름 입력" data-id="${i}">
+    `;
+    const input = card.querySelector('.name');
+
+    // 입력 중 비워지면 즉시 강조 해제
+    input.addEventListener('input', () => {
+      if (!input.value.trim()){
+        card.classList.remove('named');
+        card.style.setProperty('--hl','transparent');
+        card.style.setProperty('--hlA','transparent');
+        input.style.borderColor = 'rgba(255,255,255,.18)';
+      }
+    });
+
+    // 입력 완료 후 포커스 아웃(blur)에서 색 지정/재사용
+    input.addEventListener('blur', () => {
+      const key = norm(input.value);
+      if(!key){ return; } // 빈 값이면 위 input 핸들러가 처리
+      const {hl, hlA} = assignColorForKey(key);
+      card.style.setProperty('--hl', hl);
+      card.style.setProperty('--hlA', hlA);
+      input.style.borderColor = hl;
+      card.classList.add('named');
+    });
+
+    grid.appendChild(card);
+    inputs.push(input);
+  }
+
+  // 초기화 버튼
+  document.getElementById('clearAll').addEventListener('click', () => {
+    if(!confirm('모든 카드 이름과 색상을 초기화할까요?')) return;
+    inputs.forEach(inp=>{
+      inp.value='';
+      const card = inp.closest('.card');
+      card.classList.remove('named');
+      card.style.setProperty('--hl','transparent');
+      card.style.setProperty('--hlA','transparent');
+      inp.style.borderColor='rgba(255,255,255,.18)';
+    });
+    colorMap.clear();
+    usedHues.length = 0;
+    hueSeed = Math.random()*360;
+    hueIndex = 0;
+    inputs[0]?.focus();
+  });
+
+  // Enter로 다음 칸 이동
+  grid.addEventListener('keydown', (e) => {
+    if(e.key!=='Enter') return;
+    e.preventDefault();
+    const idx = inputs.indexOf(e.target);
+    if(idx>=0 && idx<inputs.length-1) inputs[idx+1].focus();
+  });
+
+  // 첫 칸 포커스
+  inputs[0]?.focus();
+</script>
+</body>
+</html>
